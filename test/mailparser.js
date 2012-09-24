@@ -1,7 +1,7 @@
 var MailParser = require("../lib/mailparser").MailParser,
     testCase = require('nodeunit').testCase,
-    utillib = require("util");
-
+    utillib = require("util"),
+    encodinglib = require("encoding");
 
 exports["General tests"] = {
     "Many chunks": function(test){
@@ -333,7 +333,6 @@ exports["Text encodings"] = {
             mail = new Buffer(encodedText, "utf-8");
         
         test.expect(1);
-        
         var mailparser = new MailParser();
         mailparser.end(mail);
         mailparser.on("end", function(mail){
@@ -352,27 +351,7 @@ exports["Text encodings"] = {
             test.equal(mail.subject, "Avaldus lepingu lõpetamiseks");
             test.done();
         }); 
-    },
-    
-    
-    "ks_c_5601-1987": function(test){
-        var encodedText = "Subject: =?ks_c_5601-1987?B?vcU=?=\r\n"+
-        				  "Content-Type: text/plain; charset=ks_c_5601-1987\r\n"+
-        				  "Content-Transfer-Encoding: base64\r\n"+
-        				  "\r\n"+
-        				  "vcU=",
-            mail = new Buffer(encodedText, "utf-8");
-        
-        var mailparser = new MailParser();
-        mailparser.end(mail);
-        mailparser.on("end", function(mail){
-            test.equal(mail.subject, "신");
-        	test.equal(mail.text.trim(), "신");
-            test.done();
-        }); 
     }
-    
-    
 };
 
 exports["Binary attachment encodings"] = {
@@ -753,7 +732,7 @@ exports["Transfer encoding"] = {
         var mailparser = new MailParser();
         mailparser.end(mail);
         mailparser.on("end", function(mail){
-            test.equal(mail.text, "==ÄÖÜ");
+            test.equal(mail.text, "=�=�ÄÖÜ=");
             test.done();
         }); 
     },
@@ -767,6 +746,17 @@ exports["Transfer encoding"] = {
             test.equal(Array.prototype.map.call(mail.text, function(chr){return chr.charCodeAt(0);}).join(","), "213,196,214,65533");
             test.done();
         }); 
+    },
+    "gb2312 mime words": function(test){
+        var encodedText = "From: =?gb2312?B?086yyZjl?= user@ldkf.com.tw\r\n\r\nBody",
+            mail = new Buffer(encodedText, "utf-8");
+
+        var mailparser = new MailParser();
+        mailparser.end(mail);
+        mailparser.on("end", function(mail){
+            test.deepEqual(mail.from, [{address: 'user@ldkf.com.tw', name: '游采樺'}]);
+            test.done();
+        });
     }
 };
 
@@ -1023,12 +1013,82 @@ exports["Attachment info"] = {
                               "Content-Transfer-Encoding: 8bit\r\n"+
                               "Content-Disposition: attachment\r\n"+
                               "\r\n"+
-                              "ÕÄ\r\n"+"" +
+                              "ÕÄ\r\n"+
                               "ÖÜ\r\n"+
                           "--ABC--",
             expectedHash = "cad0f72629a7245dd3d2cbf41473e3ca",
             mail = new Buffer(encodedText, "utf-8");
         
+        var mailparser = new MailParser({streamAttachments: true});
+        
+        for(var i=0, len = mail.length; i<len; i++){
+            mailparser.write(new Buffer([mail[i]]));
+        }
+        
+        test.expect(3);
+        
+        mailparser.on("attachment", function(attachment){
+            test.ok(attachment.stream, "Stream detected");
+        });
+        
+        mailparser.end();
+        
+        mailparser.on("end", function(mail){
+            test.equal(mail.attachments && mail.attachments[0] && mail.attachments[0].checksum, expectedHash);
+            test.equal(mail.attachments && mail.attachments[0] && mail.attachments[0].length, 10);
+            test.done();
+        });
+    },
+    "Stream integrity - binary, non utf-8": function(test){
+        var encodedText = "Content-type: multipart/mixed; boundary=ABC\r\n"+
+                          "\r\n"+
+                          "--ABC\r\n"+
+                              "Content-Type: application/octet-stream\r\n"+
+                              "Content-Transfer-Encoding: 8bit\r\n"+
+                              "Content-Disposition: attachment\r\n"+
+                              "\r\n"+
+                              "ÕÄ\r\n"+
+                              "ÖÜ\r\n"+
+                              "ŽŠ\r\n"+
+                          "--ABC--",
+            expectedHash = "34bca86f8cc340bbd11446ee16ee3cae",
+            mail = encodinglib.convert(encodedText, "latin-13");
+
+        var mailparser = new MailParser({streamAttachments: true});
+        
+        for(var i=0, len = mail.length; i<len; i++){
+            mailparser.write(new Buffer([mail[i]]));
+        }
+        
+        test.expect(3);
+        
+        mailparser.on("attachment", function(attachment){
+            test.ok(attachment.stream, "Stream detected");
+        });
+        
+        mailparser.end();
+        
+        mailparser.on("end", function(mail){
+            test.equal(mail.attachments && mail.attachments[0] && mail.attachments[0].checksum, expectedHash);
+            test.equal(mail.attachments && mail.attachments[0] && mail.attachments[0].length, 10);
+            test.done();
+        });
+    },
+    "Stream integrity - qp, non utf-8": function(test){
+        var encodedText = "Content-type: multipart/mixed; boundary=ABC\r\n"+
+                          "\r\n"+
+                          "--ABC\r\n"+
+                              "Content-Type: application/octet-stream; charset=iso-8859-13\r\n"+
+                              "Content-Transfer-Encoding: quoted-printable\r\n"+
+                              "Content-Disposition: attachment\r\n"+
+                              "\r\n"+
+                              "=d5=c4\r\n"+
+                              "=d6=dc\r\n"+
+                              "=de=d0\r\n"+
+                          "--ABC--",
+            expectedHash = "34bca86f8cc340bbd11446ee16ee3cae",
+            mail = new Buffer(encodedText, "utf-8");
+
         var mailparser = new MailParser({streamAttachments: true});
         
         for(var i=0, len = mail.length; i<len; i++){
